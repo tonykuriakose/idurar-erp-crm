@@ -16,6 +16,7 @@ const routerApp = (entity, controller) => {
   router.route(`/${entity}/filter`).get(catchErrors(controller['filter']));
   router.route(`/${entity}/summary`).get(catchErrors(controller['summary']));
 
+
   if (entity === 'invoice' || entity === 'quote' || entity === 'payment') {
     router.route(`/${entity}/mail`).post(catchErrors(controller['mail']));
   }
@@ -29,5 +30,10 @@ routesList.forEach(({ entity, controllerName }) => {
   const controller = appControllers[controllerName];
   routerApp(entity, controller);
 });
+
+  router.route('/query/:id/notes').post(catchErrors(appControllers.queryController['addNote']));
+  router.route('/query/:id/notes/:noteId').delete(catchErrors(appControllers.queryController['removeNote']));
+
+
 
 module.exports = router;
