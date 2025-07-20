@@ -126,3 +126,5 @@ querySchema.index({ customer: 1 });
 querySchema.index({ queryNumber: 1 });
 
 module.exports = mongoose.model('Query', querySchema);
+
+
