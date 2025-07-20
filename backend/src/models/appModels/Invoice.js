@@ -150,6 +150,11 @@ const invoiceSchema = new mongoose.Schema({
   notes: {
     type: String,
   },
+  notesSummary: {
+  type: String,
+  trim: true,
+  default: ''
+},
   status: {
     type: String,
     enum: ['draft', 'pending', 'sent', 'refunded', 'cancelled', 'on hold'],

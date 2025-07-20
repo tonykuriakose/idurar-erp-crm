@@ -20,7 +20,6 @@ const schema = Joi.object({
         quantity: Joi.number().required(),
         price: Joi.number().required(),
         total: Joi.number().required(),
-        // ✅ NEW: Add notes field validation
         notes: Joi.string().allow('').optional(),
       }).required()
     )
