@@ -1,4 +1,5 @@
 const Joi = require('joi');
+
 const schema = Joi.object({
   client: Joi.alternatives().try(Joi.string(), Joi.object()).required(),
   number: Joi.number().required(),
@@ -7,6 +8,8 @@ const schema = Joi.object({
   notes: Joi.string().allow(''),
   expiredDate: Joi.date().required(),
   date: Joi.date().required(),
+  // ✅ NEW: Add currency field validation
+  currency: Joi.string().optional(),
   // array cannot be empty
   items: Joi.array()
     .items(
@@ -17,6 +20,8 @@ const schema = Joi.object({
         quantity: Joi.number().required(),
         price: Joi.number().required(),
         total: Joi.number().required(),
+        // ✅ NEW: Add notes field validation
+        notes: Joi.string().allow('').optional(),
       }).required()
     )
     .required(),

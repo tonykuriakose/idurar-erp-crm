@@ -292,30 +292,32 @@ html
         .col.col-24
           .space  
       main
-        table.table-invoice
-          thead
-            tr.tableHeader
-              th.service #{translate('item')}
-              th #{translate('Quantity')}
-              th #{translate('PRICE')}
-              th #{translate('TOTAL')}
-          tbody
-            each item in model.items
-              tr
-                td.service #{item.itemName}
-                  span #{item.description}
-                td.qty #{item.quantity}  
-                td.unit  #{moneyFormatter({amount:item.price})}
-                td.total #{moneyFormatter({amount:item.total})}
-            tr
-              td(colspan='3') #{translate('SUB TOTAL')}
-              td.total #{moneyFormatter({amount:model.subTotal})}
-            tr
-              td(colspan='3') #{translate('TAX')} #{model.taxRate} %
-              td.total #{moneyFormatter({amount:model.taxTotal})}
-            tr
-              td.grand.total(colspan='3')  #{translate('TOTAL')} 
-              td.grand.total #{moneyFormatter({amount:model.total})}
+       table.table-invoice
+  thead
+    tr.tableHeader
+      th.service #{translate('item')}
+      th #{translate('Quantity')}
+      th #{translate('PRICE')}
+      th #{translate('TOTAL')}
+  tbody
+    each item in model.items
+      tr
+        td.service #{item.itemName}
+          span #{item.description}
+          if item.notes && item.notes.trim()
+            span(style="display:block; margin-top:5px; font-style:italic; color:#888; font-size:9px;") Notes: #{item.notes}
+        td.qty #{item.quantity}  
+        td.unit  #{moneyFormatter({amount:item.price})}
+        td.total #{moneyFormatter({amount:item.total})}
+    tr
+      td(colspan='3') #{translate('SUB TOTAL')}
+      td.total #{moneyFormatter({amount:model.subTotal})}
+    tr
+      td(colspan='3') #{translate('TAX')} #{model.taxRate} %
+      td.total #{moneyFormatter({amount:model.taxTotal})}
+    tr
+      td.grand.total(colspan='3')  #{translate('TOTAL')} 
+      td.grand.total #{moneyFormatter({amount:model.total})}
         
       .col.col-24
           .space     
