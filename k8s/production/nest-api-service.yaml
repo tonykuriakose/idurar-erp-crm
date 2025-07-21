@@ -1,0 +1,14 @@
+# k8s/production/nest-api-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nest-api-service
+  namespace: production
+spec:
+  selector:
+    app: nest-api
+  ports:
+  - protocol: TCP
+    port: 8888
+    targetPort: 8888
+  type: ClusterIP

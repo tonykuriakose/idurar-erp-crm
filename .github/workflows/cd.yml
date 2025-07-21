@@ -1,0 +1,264 @@
+# .github/workflows/cd.yml
+name: CD Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+    branches: [ main, master ]
+
+env:
+  REGISTRY: docker.io
+  REGISTRY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  REGISTRY_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'push' }}
+    
+    strategy:
+      matrix:
+        service:
+          - name: backend
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+            image: idurar-backend
+          - name: frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+            image: idurar-frontend
+          - name: nest-integration-api
+            context: ./nest_api_module/integration-api
+            dockerfile: ./nest_api_module/integration-api/Dockerfile
+            image: nest-integration-api
+          - name: nextjs-crud
+            context: ./nextjs_crud_app
+            dockerfile: ./nextjs_crud_app/Dockerfile
+            image: nextjs-projects-crud
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ env.REGISTRY_USERNAME }}
+        password: ${{ env.REGISTRY_PASSWORD }}
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=sha,prefix={{branch}}-
+        
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ matrix.service.context }}
+        file: ${{ matrix.service.dockerfile }}
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image }}:latest
+        format: spdx-json
+        output-file: ${{ matrix.service.name }}-sbom.spdx.json
+        
+    - name: Upload SBOM as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.service.name }}-sbom
+        path: ${{ matrix.service.name }}-sbom.spdx.json
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/staging'
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+        
+    - name: Configure AWS credentials (if using EKS)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+      if: secrets.AWS_ACCESS_KEY_ID != ''
+        
+    - name: Update kubeconfig for EKS
+      run: |
+        aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+      if: secrets.AWS_ACCESS_KEY_ID != ''
+      
+    - name: Deploy to Kubernetes (staging)
+      run: |
+        # Update image tags in deployment manifests
+        sed -i "s|{{BACKEND_IMAGE}}|${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/idurar-backend:${{ github.sha }}|g" k8s/staging/backend-deployment.yaml
+        sed -i "s|{{FRONTEND_IMAGE}}|${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/idurar-frontend:${{ github.sha }}|g" k8s/staging/frontend-deployment.yaml
+        sed -i "s|{{NEST_API_IMAGE}}|${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/nest-integration-api:${{ github.sha }}|g" k8s/staging/nest-api-deployment.yaml
+        sed -i "s|{{NEXTJS_IMAGE}}|${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/nextjs-projects-crud:${{ github.sha }}|g" k8s/staging/nextjs-deployment.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f k8s/staging/namespace.yaml
+        kubectl apply -f k8s/staging/configmap.yaml
+        kubectl apply -f k8s/staging/secrets.yaml
+        kubectl apply -f k8s/staging/
+        
+        # Wait for deployments to be ready
+        kubectl rollout status deployment/backend-deployment -n staging --timeout=300s
+        kubectl rollout status deployment/frontend-deployment -n staging --timeout=300s
+        kubectl rollout status deployment/nest-api-deployment -n staging --timeout=300s
+        kubectl rollout status deployment/nextjs-deployment -n staging --timeout=300s
+      if: secrets.AWS_ACCESS_KEY_ID != ''
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+      if: secrets.AWS_ACCESS_KEY_ID != ''
+        
+    - name: Update kubeconfig for EKS
+      run: |
+        aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+      if: secrets.AWS_ACCESS_KEY_ID != ''
+      
+    - name: Deploy to Kubernetes (production)
+      run: |
+        # Update image tags in deployment manifests
+        sed -i "s|{{BACKEND_IMAGE}}|${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/idurar-backend:${{ github.sha }}|g" k8s/production/backend-deployment.yaml
+        sed -i "s|{{FRONTEND_IMAGE}}|${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/idurar-frontend:${{ github.sha }}|g" k8s/production/frontend-deployment.yaml
+        sed -i "s|{{NEST_API_IMAGE}}|${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/nest-integration-api:${{ github.sha }}|g" k8s/production/nest-api-deployment.yaml
+        sed -i "s|{{NEXTJS_IMAGE}}|${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/nextjs-projects-crud:${{ github.sha }}|g" k8s/production/nextjs-deployment.yaml
+        
+        # Apply Kubernetes manifests with production settings
+        kubectl apply -f k8s/production/namespace.yaml
+        kubectl apply -f k8s/production/configmap.yaml
+        kubectl apply -f k8s/production/secrets.yaml
+        kubectl apply -f k8s/production/
+        
+        # Wait for deployments to be ready
+        kubectl rollout status deployment/backend-deployment -n production --timeout=600s
+        kubectl rollout status deployment/frontend-deployment -n production --timeout=600s
+        kubectl rollout status deployment/nest-api-deployment -n production --timeout=600s
+        kubectl rollout status deployment/nextjs-deployment -n production --timeout=600s
+        
+        # Run smoke tests
+        kubectl run smoke-test --image=curlimages/curl --rm -i --restart=Never -n production -- \
+          sh -c "curl -f http://backend-service:8000/health && curl -f http://frontend-service:3000 && curl -f http://nest-api-service:8888/integration/reports/health"
+      if: secrets.AWS_ACCESS_KEY_ID != ''
+
+  docker-compose-deploy:
+    name: Docker Compose Deployment (Alternative)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Create deployment package
+      run: |
+        # Create docker-compose.prod.yml with latest images
+        envsubst < docker-compose.yml > docker-compose.prod.yml
+        tar -czf deployment-package.tar.gz docker-compose.prod.yml .env.example k8s/
+        
+    - name: Upload deployment artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-package
+        path: deployment-package.tar.gz
+        
+    - name: Deploy with Docker Compose (if self-hosted runner)
+      run: |
+        # This would run on a self-hosted runner with docker-compose
+        echo "🚀 Deployment package created"
+        echo "📦 Images available at:"
+        echo "   - ${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/idurar-backend:latest"
+        echo "   - ${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/idurar-frontend:latest"
+        echo "   - ${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/nest-integration-api:latest"
+        echo "   - ${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/nextjs-projects-crud:latest"
+        echo ""
+        echo "📋 To deploy with Docker Compose:"
+        echo "   docker-compose -f docker-compose.prod.yml up -d"
+
+  notify:
+    name: Deployment Notification
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-production]
+    if: always()
+    
+    steps:
+    - name: Notify deployment status
+      run: |
+        if [[ "${{ needs.build-and-push.result }}" == "success" ]]; then
+          echo "✅ Docker images built and pushed successfully"
+        else
+          echo "❌ Docker image build failed"
+        fi
+        
+        if [[ "${{ needs.deploy-production.result }}" == "success" ]]; then
+          echo "✅ Production deployment successful"
+        elif [[ "${{ needs.deploy-production.result }}" == "skipped" ]]; then
+          echo "⏭️ Production deployment skipped"
+        else
+          echo "❌ Production deployment failed"
+        fi
+        
+        echo ""
+        echo "🔗 Deployment URLs (when configured):"
+        echo "   - Frontend: https://your-domain.com"
+        echo "   - Backend API: https://api.your-domain.com"
+        echo "   - Integration API: https://integration.your-domain.com"
+        echo "   - Projects CRUD: https://projects.your-domain.com"
